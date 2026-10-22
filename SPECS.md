@@ -1,7 +1,7 @@
 # SPECS.md — Module de Fraîcheur Pipeline & Dashboard
 
 **Date :** 2026-10-22
-**Version :** 1.4
+**Version :** 1.5
 
 ## 1. Problématique Métier
 Surveiller la fraîcheur d'un pipeline d'ingestion Cloud (ex. flux Billing). Détecter les retards silencieux : un pipeline n'est à jour qu'après validation métier réussie. Restituer l'état via un dashboard interactif.
@@ -38,13 +38,14 @@ erDiagram
     }
 ```
 
-`EVALUATION_FRAICHEUR` représente le résultat métier dans le MCD. Pour cette application, elle n'est pas persistée : `freshness.py` la calcule à la demande et la représente par `FreshnessResult`. SQLite stocke `PIPELINE` et `EXECUTION_INGESTION` ; le MCD complet à trois entités est conservé pour expliquer le besoin.
+Ce MCD décrit trois concepts métier et leurs relations ; il n'impose pas une table SQL par entité. Le modèle logique et le modèle physique peuvent être différents. Dans cette application, `PIPELINE` et `EXECUTION_INGESTION` sont persistés dans SQLite. `EVALUATION_FRAICHEUR` est calculée à la demande par `freshness.py` et représentée par `FreshnessResult`, sans table d'évaluations.
 
 ## 3. Constitution (Arbitrages Métier)
 - Règle 1B (Mesure) : Retard calculé par rapport à l'échéance attendue (dernière exécution valide + fréquence).
 - Règle 2B (Critère de succès) : Seules les exécutions avec statut == 'VALIDE' réinitialisent le repère. Les erreurs sont ignorées.
 - Règle 3B (Cas Limite) : Si aucune exécution valide n'existe, retard_minutes est None, statut_calcule = 'CRITIQUE'.
 - Règle 4A (Seuils) : NORMAL (<= dégradé), DEGRADE (> dégradé ET <= critique), CRITIQUE (> critique).
+- Règle 5 (Donnée invalide) : Un statut d'exécution autre que `VALIDE` ou `EN_ERREUR` est une erreur. Le moteur le signale explicitement ; le dashboard affiche une erreur lisible pour le pipeline concerné et continue d'afficher les autres pipelines.
 
 ## 4. Architecture et Standards de Développement
 - **freshness.py** : Moteur de calcul pur (business logic). Doit être typé (Type hints) et documenté.
@@ -80,6 +81,7 @@ def evaluate_pipeline(
 - Seule la `date_validation` de la dernière exécution `VALIDE` sert de repère ; `date_debut` n'est jamais utilisée pour le calcul.
 - Une exécution `VALIDE` sans `date_validation` ne sert pas de repère. Si aucune autre validation exploitable n'existe, le résultat est `CRITIQUE` avec `retard_minutes = None` (règle 3B).
 - Les règles 1B à 4A de la section 3 s'appliquent sans changement.
+- Si une exécution a un statut inconnu, `evaluate_pipeline` lève `ValueError` en indiquant le code du pipeline et le statut reçu. Il ne retourne pas de résultat de fraîcheur pour ce pipeline.
 
 ### Contrat de configuration de `seed.py` (décision validée)
 Le chemin de la base SQLite n'est pas codé en dur ; `seed.py` le résout dans cet ordre de priorité :
@@ -105,6 +107,7 @@ L'interface Streamlit doit inclure :
 - **Sélecteur** : une liste déroulante alimentée par la base permet d'examiner un scénario (un pipeline) : son état, son retard (« aucune validation » si `None`) et ses exécutions.
 - **Bouton « Actualiser les scénarios »** : appelle `seed()` pour régénérer les données relativement à l'heure courante. C'est la seule écriture du dashboard.
 - **Base absente ou illisible** : message lisible indiquant que la base est introuvable et qu'il faut cliquer sur « Actualiser les scénarios » pour la créer. Une `ConfigError` est aussi affichée en clair, sans trace d'exécution.
+- **Statut d'exécution inconnu** : le pipeline concerné affiche une erreur lisible contenant son code et le statut reçu. Les autres pipelines restent visibles et évalués. L'application continue de fonctionner ; cette erreur ne déclenche aucune écriture.
 - **Dépendance** : `streamlit`, déclarée dans `requirements.txt`. Aucune autre dépendance d'exécution.
 
 ## 6. Scénarios d'acceptation (Moteur & Data)
