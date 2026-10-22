@@ -1,0 +1,5 @@
+Dans ce dépôt, lis `SPECS.md` et `CLAUDE.md`, puis les deux modules déjà validés. Travaille uniquement sur le dashboard `app.py`, `requirements.txt` et le test d'intégration `test_integration.py` ; adapte les tests existants uniquement si la spec validée l'exige, après arrêt et arbitrage humain.
+
+Implémente l'interaction de la section 5. Le dashboard lit la base en lecture seule, appelle le moteur pur, affiche tous les pipelines et leurs états, permet d'examiner un pipeline et ne régénère les données qu'avec le bouton prévu. Le test d'intégration, écrit après le pipeline complet, vérifie le trajet SQLite → lecture → moteur avec une base temporaire. Exécute toute la suite de tests, `git diff --check` et un démarrage réel du serveur sur une base temporaire. Vérifie que la base d'un éventuel autre projet n'a pas été touchée.
+
+Ne fais pas de commit. Rapporte les résultats, les fichiers touchés, le diff et ce qui reste à vérifier visuellement. Si le contrat laisse une décision ouverte, arrête-toi avec `🚨 SPEC MANQUANTE : ...` et attends l'arbitrage humain.
