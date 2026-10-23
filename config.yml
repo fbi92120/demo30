@@ -1,0 +1,3 @@
+# Configuration of demo30 (flat "key: value" lines only).
+# Overridden by the DEMO30_DB_PATH environment variable or an explicit db_path argument.
+db_path: data.db

@@ -1,7 +1,7 @@
 # SPECS.md — Module de Fraîcheur Pipeline & Dashboard
 
-**Date :** 2026-10-22
-**Version :** 1.5
+**Date :** 2026-10-23
+**Version :** 1.6
 
 ## 1. Problématique Métier
 Surveiller la fraîcheur d'un pipeline d'ingestion Cloud (ex. flux Billing). Détecter les retards silencieux : un pipeline n'est à jour qu'après validation métier réussie. Restituer l'état via un dashboard interactif.
@@ -46,6 +46,7 @@ Ce MCD décrit trois concepts métier et leurs relations ; il n'impose pas une t
 - Règle 3B (Cas Limite) : Si aucune exécution valide n'existe, retard_minutes est None, statut_calcule = 'CRITIQUE'.
 - Règle 4A (Seuils) : NORMAL (<= dégradé), DEGRADE (> dégradé ET <= critique), CRITIQUE (> critique).
 - Règle 5 (Donnée invalide) : Un statut d'exécution autre que `VALIDE` ou `EN_ERREUR` est une erreur. Le moteur le signale explicitement ; le dashboard affiche une erreur lisible pour le pipeline concerné et continue d'afficher les autres pipelines.
+- Règle 6 (Date illisible) : si une date d'exécution (début ou validation) présente dans la base n'est pas au format ISO 8601, même si le calcul ne l'utilise pas, le dashboard affiche une erreur lisible pour le pipeline concerné et continue d'évaluer les autres pipelines. Une date de validation absente (`NULL`) pour une exécution `EN_ERREUR` est normale et n'est pas une erreur.
 
 ## 4. Architecture et Standards de Développement
 - **freshness.py** : Moteur de calcul pur (business logic). Doit être typé (Type hints) et documenté.
@@ -94,18 +95,36 @@ Le chemin de la base SQLite n'est pas codé en dur ; `seed.py` le résout dans c
 - `config.yml` est lu par un lecteur minimal sans dépendance. Format accepté : lignes plates `clé: valeur`, lignes vides et lignes de commentaire commençant par `#`. Pas d'imbrication, pas de listes, pas de commentaire en fin de ligne. Des guillemets simples ou doubles autour de la valeur sont retirés.
 - La seule clé connue et requise est `db_path`. Une clé inconnue, un doublon, une ligne mal formée, une valeur vide, une clé requise absente ou un fichier introuvable lèvent une erreur lisible (`ConfigError`) qui nomme le fichier et la ligne ; rien n'est ignoré silencieusement.
 - Exécuté en ligne de commande, `seed.py` affiche cette erreur et se termine en code 1, sans trace d'exécution.
+- `config.yml` n'est lu que si ni l'argument `db_path` ni la variable `DEMO30_DB_PATH` ne fournissent le chemin : son absence ou son invalidité ne provoque alors aucune `ConfigError`.
+
+### Données d'amorçage et schéma de `seed.py` (décision validée)
+Signatures : `seed(db_path=None, now=None) -> Path` et `resolve_db_path(db_path=None) -> Path`. `now` est injectable pour rendre les tests déterministes ; par défaut, `datetime.now()`.
+
+- **Tables SQLite** : `pipeline` (`code_pipeline` PK, `nom`, `frequence_minutes`, `seuil_degrade_minutes`, `seuil_critique_minutes`) et `execution_ingestion` (`id_execution` PK, `code_pipeline` FK, `date_debut`, `date_validation` NULL si erreur, `statut`). Aucune contrainte `CHECK` sur `statut`, afin qu'un statut inconnu (règle 5) reste représentable.
+- **Dates** : ISO 8601 locales, sans fuseau, à la seconde.
+- **`seed()`** remplace le contenu de ces deux tables uniquement ; les autres tables et les autres bases ne sont jamais touchées.
+- **Jeu de référence** : 4 pipelines (fréquence 60 min, seuils 30 / 60 min pour tous) et 5 exécutions, datées relativement à `now` :
+
+| Pipeline | Nom | Exécution | Statut | Début | Validation |
+|---|---|---|---|---|---|
+| PL-101 | Billing — nominal | EX-001 | VALIDE | now − 35 min | now − 30 min |
+| PL-102 | Billing — retard léger | EX-002 | VALIDE | now − 110 min | now − 105 min |
+| PL-103 | Billing — erreurs ignorées | EX-003 | VALIDE | now − 145 min | now − 140 min |
+| PL-103 | | EX-004 | EN_ERREUR | now − 10 min | NULL |
+| PL-104 | Billing — zéro validation | EX-005 | EN_ERREUR | now − 20 min | NULL |
 
 ## 5. Spécifications du Dashboard (app.py)
 L'interface Streamlit doit inclure :
 1. Un titre clair et un contexte.
-2. Un panneau de contrôle avec des boutons ou un menu déroulant pour injecter/activer les 4 scénarios de données (Nominal, Retard, Erreur, Zéro validation) afin de simuler l'évolution en direct.
+2. Un panneau de contrôle avec un menu déroulant pour consulter un pipeline (un scénario) et un bouton « Actualiser les scénarios » qui régénère tout le jeu de référence (4 pipelines, 5 exécutions, voir « Données d'amorçage »). Il n'y a pas de bascule individuelle des scénarios.
 3. Un affichage visuel de l'état des pipelines (ex: pastilles de couleur Vert/Orange/Rouge).
 
 ### Interaction du dashboard (décision validée)
 - **Lecture** : `app.py` résout le chemin de la base avec `resolve_db_path()` (contrat de `seed.py`), charge les pipelines et leurs exécutions depuis SQLite, construit des `Execution` et appelle `evaluate_pipeline` avec l'heure courante. Hors bouton d'actualisation, la base est ouverte en lecture seule et n'est jamais modifiée.
 - **États** : tous les pipelines présents dans la base (quatre avec les données d'amorçage) sont affichés avec un état visuel : NORMAL = vert, DEGRADE = orange, CRITIQUE = rouge. Aucun identifiant de pipeline n'est codé en dur dans l'interface.
 - **Sélecteur** : une liste déroulante alimentée par la base permet d'examiner un scénario (un pipeline) : son état, son retard (« aucune validation » si `None`) et ses exécutions.
-- **Bouton « Actualiser les scénarios »** : appelle `seed()` pour régénérer les données relativement à l'heure courante. C'est la seule écriture du dashboard.
+- **Bouton « Actualiser les scénarios »** : appelle `seed()` pour régénérer tout le jeu de référence relativement à l'heure courante. C'est la seule écriture du dashboard. Aucune bascule individuelle de scénario n'existe.
+- **Date illisible** : règle 6. Le pipeline concerné affiche une erreur lisible, les autres restent évalués, et aucune écriture n'est déclenchée.
 - **Base absente ou illisible** : message lisible indiquant que la base est introuvable et qu'il faut cliquer sur « Actualiser les scénarios » pour la créer. Une `ConfigError` est aussi affichée en clair, sans trace d'exécution.
 - **Statut d'exécution inconnu** : le pipeline concerné affiche une erreur lisible contenant son code et le statut reçu. Les autres pipelines restent visibles et évalués. L'application continue de fonctionner ; cette erreur ne déclenche aucune écriture.
 - **Dépendance** : `streamlit`, déclarée dans `requirements.txt`. Aucune autre dépendance d'exécution.
